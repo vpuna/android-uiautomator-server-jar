@@ -36,6 +36,7 @@ public class Main {
     public static void main(String... args) {
         Options options = new Options();
         options.addOption("p", "port", true, "Port to listen on (1-65535, default: " + DEFAULT_PORT + ")");
+        options.addOption("t", "token", true, "Require this key in the X-Blackcat-Key header of every request");
         options.addOption("h", "help", false, "Print this help message");
 
         HelpFormatter formatter = new HelpFormatter();
@@ -70,8 +71,15 @@ public class Main {
             return;
         }
 
+        String token = cmd.getOptionValue("t");
+        if (token != null && token.isEmpty()) {
+            System.err.println("Invalid token: must not be empty.");
+            System.exit(1);
+            return;
+        }
+
         try {
-            runServer(port);
+            runServer(port, token);
         } catch (Exception e) {
             e.printStackTrace();
             System.exit(1);
@@ -88,6 +96,10 @@ public class Main {
     }
 
     public static void runServer(int port) throws Exception {
+        runServer(port, null);
+    }
+
+    public static void runServer(int port, String token) throws Exception {
         Ln.i("[UiAutomator2Server] Starting Server");
         Workarounds.apply(true, true);
         // make sure Looper.prepareMainLooper() is called
@@ -111,11 +123,11 @@ public class Main {
 
         setupTmpdir();
 
-        AutomatorHttpServer server = new AutomatorHttpServer(port);
+        AutomatorHttpServer server = new AutomatorHttpServer(port, token);
         server.route("/jsonrpc/0", jrs);
         server.start();
 
-        Ln.i("http server listening on *:" + port);
+        Ln.i("http server listening on 127.0.0.1:" + port + (token != null ? " (key required)" : ""));
         while (server.isAlive()) {
             Thread.sleep(500);
         }

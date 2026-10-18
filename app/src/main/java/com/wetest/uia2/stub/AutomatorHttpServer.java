@@ -34,6 +34,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -43,9 +46,54 @@ import uiautomator.InstrumentShellWrapper;
 public class AutomatorHttpServer extends NanoHTTPD {
 
     public static final int DEFAULT_PORT = 9008;
+    public static final String KEY_HEADER = "X-Blackcat-Key";
+
+    // SHA-256 of the required key, or null when no key is required
+    private final byte[] keyDigest;
 
     public AutomatorHttpServer(int port) {
-        super(port);
+        this(port, null);
+    }
+
+    public AutomatorHttpServer(int port, String key) {
+        // only reachable from inside the device (e.g. through adb forward)
+        super("127.0.0.1", port);
+        this.keyDigest = key == null ? null : sha256(key);
+    }
+
+    private static byte[] sha256(String s) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    // Compares fixed-length digests so the time taken depends on neither the key's length nor its content
+    private boolean isAuthorized(IHTTPSession session) {
+        if (keyDigest == null) {
+            return true;
+        }
+        // NanoHTTPD stores header names in lower case
+        String given = session.getHeaders().get(KEY_HEADER.toLowerCase());
+        byte[] givenDigest = sha256(given == null ? "" : given);
+        int diff = given == null ? 1 : 0;
+        for (int i = 0; i < keyDigest.length; i++) {
+            diff |= keyDigest[i] ^ givenDigest[i];
+        }
+        return diff == 0;
+    }
+
+    @Override
+    public Response serve(IHTTPSession session) {
+        // checked before the body is read or any route runs
+        if (!isAuthorized(session)) {
+            Response r = newFixedLengthResponse(Response.Status.UNAUTHORIZED, MIME_PLAINTEXT, "Unauthorized");
+            // the request body was never read, so the connection cannot be reused
+            r.closeConnection(true);
+            return r;
+        }
+        return super.serve(session);
     }
 
     private Map<String, JsonRpcServer> router = new HashMap<String, JsonRpcServer>();
